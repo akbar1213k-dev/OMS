@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Search, X, Plus, Trash2, Filter, Settings, FileDown, FileUp, Database, Edit, ChevronDown, Check, AlertCircle, Info, ChevronRight, AlertTriangle } from 'lucide-react';
+import { Search, X, Plus, Trash2, Filter, Settings, FileDown, FileUp, Database, Edit, ChevronDown, Check, AlertCircle, Info, ChevronRight, AlertTriangle, CloudOff, ArrowUp, ArrowDown } from 'lucide-react';
 
 const STATUS_ORDER = ['alokasi', 'suratJalan', 'integrasi', 'terarsip'];
 const STATUS_NAMES = { alokasi: 'Alokasi', suratJalan: 'S. Jalan', integrasi: 'Integrasi', terarsip: 'Terarsip' };
@@ -19,6 +19,10 @@ export default function App() {
   const [rawInputText, setRawInputText] = useState('');
   const [statsExpanded, setStatsExpanded] = useState({ umum: false, sender: false, status: false });
   const [statDetailOpen, setStatDetailOpen] = useState({});
+  
+  // Smart Scroll States
+  const [showScrollTop, setShowScrollTop] = useState(false);
+  const [showScrollBottom, setShowScrollBottom] = useState(false);
   
   // Selection & Action States
   const [selectedOrderIds, setSelectedOrderIds] = useState(new Set());
@@ -43,6 +47,8 @@ export default function App() {
   const longPressTimer = useRef(null);
   const isDragging = useRef(false);
   const toastTimeout = useRef(null);
+  const scrollTimer = useRef(null);
+  const lastScrollY = useRef(0);
 
   useEffect(() => {
     try {
@@ -50,7 +56,8 @@ export default function App() {
       if (savedOrders) {
         const parsed = JSON.parse(savedOrders);
         const sanitized = parsed.map(o => ({ 
-            ...o, notes: o.notes || '', approvedForbidden: o.approvedForbidden || false, 
+            ...o, notes: o.notes || '', approvedForbidden: o.approvedForbidden || false,
+            markedBelomAwan: o.markedBelomAwan || false,
             status: o.status || { alokasi: false, suratJalan: false, integrasi: false, terarsip: false } 
         }));
         setOrdersData(sanitized);
@@ -64,6 +71,45 @@ export default function App() {
 
   useEffect(() => { localStorage.setItem('ordersData_react_v2', JSON.stringify(ordersData)); }, [ordersData]);
   useEffect(() => { localStorage.setItem('forbiddenWords_react_v2', JSON.stringify(forbiddenWords)); }, [forbiddenWords]);
+
+  // Smart Scroll Listener
+  useEffect(() => {
+    const handleScroll = () => {
+      const currentY = window.scrollY || window.pageYOffset;
+      const maxY = document.documentElement.scrollHeight - window.innerHeight;
+      const diff = currentY - lastScrollY.current;
+
+      // Hanya deteksi jika scroll cukup signifikan (minimal 10px) untuk hindari getaran halus
+      if (Math.abs(diff) > 10) {
+          if (diff < 0 && currentY > 300) {
+              // Scrolling UP
+              setShowScrollTop(true);
+              setShowScrollBottom(false);
+          } else if (diff > 0 && currentY < maxY - 300) {
+              // Scrolling DOWN
+              setShowScrollBottom(true);
+              setShowScrollTop(false);
+          }
+
+          // Auto-hide tombol setelah 2.5 detik berhenti scroll
+          if (scrollTimer.current) clearTimeout(scrollTimer.current);
+          scrollTimer.current = setTimeout(() => {
+              setShowScrollTop(false);
+              setShowScrollBottom(false);
+          }, 2500);
+      }
+      lastScrollY.current = currentY;
+    };
+
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    return () => {
+        window.removeEventListener('scroll', handleScroll);
+        if (scrollTimer.current) clearTimeout(scrollTimer.current);
+    };
+  }, []);
+
+  const scrollToTop = () => window.scrollTo({ top: 0, behavior: 'smooth' });
+  const scrollToBottom = () => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' });
 
   const showToast = (message, type = 'success', actionId = null) => {
     setToast({ visible: true, message, type, actionId });
@@ -89,7 +135,6 @@ export default function App() {
 
   const filteredOrders = useMemo(() => {
     return ordersData.filter(o => {
-      // 1. Date Filter (Global Filter)
       if (dateFilter.start || dateFilter.end) {
         const itemDate = parseWhatsAppDateToJSDate(o.datetime);
         if (!itemDate) return true;
@@ -99,7 +144,6 @@ export default function App() {
         if (dateFilter.end) passEnd = itemTime <= dateFilter.end;
         if (!(passStart && passEnd)) return false;
       }
-      // 2. Search Filter (Tabel)
       if (searchQuery) {
         const query = searchQuery.toLowerCase();
         if (searchColumn === 'message' && !o.message.toLowerCase().includes(query)) return false;
@@ -138,7 +182,8 @@ export default function App() {
         id: 'ord_' + now + '_' + Math.random().toString(36).substr(2, 5), 
         datetime: match[1].trim(), sender: match[2].trim(), message: match[3].trim(), 
         notes: '', status: { alokasi: false, suratJalan: false, integrasi: false, terarsip: false }, 
-        timestamp: now + newDataCount, approvedForbidden: false 
+        timestamp: now + newDataCount, approvedForbidden: false,
+        markedBelomAwan: false 
       };
       
       const existingOrder = ordersData.find(o => o.datetime === newOrder.datetime && o.sender === newOrder.sender && o.message === newOrder.message);
@@ -176,6 +221,13 @@ export default function App() {
     if (!text || forbiddenWords.length === 0) return { found: false, words: [] };
     const foundWords = forbiddenWords.filter(word => (new RegExp(`\\b${word}\\b`, 'i')).test(text));
     return { found: foundWords.length > 0, words: foundWords };
+  };
+
+  const toggleBelomAwanStatus = (e, orderId) => {
+    if (e) e.stopPropagation();
+    setOrdersData(prev => prev.map(o => o.id === orderId ? { ...o, markedBelomAwan: !o.markedBelomAwan } : o));
+    const currentStatus = ordersData.find(o => o.id === orderId)?.markedBelomAwan;
+    showToast(!currentStatus ? "Ditandai: Belom Awan" : "Tanda awan dihapus", "success");
   };
 
   const attemptStatusToggle = (orderId, statusKey, isQuickAction = false) => {
@@ -250,7 +302,9 @@ export default function App() {
                 const exists = newData.find(o => o.datetime === newOrder.datetime && o.sender === newOrder.sender && o.message === newOrder.message);
                 if (!exists) {
                     if (newData.find(o => o.id === newOrder.id)) newOrder.id = 'ord_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5);
-                    newOrder.approvedForbidden = newOrder.approvedForbidden || false; newData.push(newOrder); added++;
+                    newOrder.approvedForbidden = newOrder.approvedForbidden || false;
+                    newOrder.markedBelomAwan = newOrder.markedBelomAwan || false;
+                    newData.push(newOrder); added++;
                 } else dupes++;
             });
             if (added > 0) { setOrdersData(newData); setSortConfig({ key: 'timestamp', direction: 'desc' }); showToast(`Impor Sukses: ${added} baru. ${dupes} ganda diabaikan.`); } 
@@ -271,7 +325,7 @@ export default function App() {
   };
 
   const Header = () => (
-    <header className="max-w-6xl mx-auto mb-3 relative z-20">
+    <header className="max-w-6xl mx-auto mb-3 relative z-20" id="top-header">
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 py-3 px-4 md:px-5 flex items-center justify-between relative z-10">
             <h1 className="text-lg md:text-xl font-bold text-slate-900 flex items-center gap-2">📦 <span className="hidden sm:inline">Order Management System</span><span className="sm:hidden">OMS</span></h1>
             <div className="flex items-center gap-2 md:gap-3">
@@ -293,6 +347,7 @@ export default function App() {
     const countTuging = filteredOrders.filter(o => /t[uo]ging/i.test(o.message));
     const countNotes = filteredOrders.filter(o => o.notes && o.notes.trim() !== '');
     const countTerlarang = filteredOrders.filter(o => containsForbiddenWords(o.message).found);
+    const countBelomAwan = filteredOrders.filter(o => o.markedBelomAwan); 
 
     const statusStats = STATUS_ORDER.map(k => ({ key: k, name: STATUS_NAMES[k], done: filteredOrders.filter(o => o.status[k]), belum: total - filteredOrders.filter(o => o.status[k]).length }));
     const senderCounts = {}; filteredOrders.forEach(o => { if(!senderCounts[o.sender]) senderCounts[o.sender] = []; senderCounts[o.sender].push(o); });
@@ -316,7 +371,13 @@ export default function App() {
             <div className="bg-slate-50 p-2.5 rounded-lg mt-2 mb-2 border border-slate-200 shadow-inner max-h-60 overflow-y-auto flex flex-col gap-2">
                 {orders && orders.length > 0 ? orders.map(o => (
                   <div key={o.id} className="text-[11px] bg-white p-2 rounded border shadow-sm">
-                      <div className="font-bold text-slate-800 border-b border-slate-100 pb-1 mb-1 flex justify-between items-center"><span>{o.sender}</span><span className="font-mono text-slate-400 text-[9px]">{o.datetime}</span></div>
+                      <div className="font-bold text-slate-800 border-b border-slate-100 pb-1 mb-1 flex justify-between items-center">
+                          <div className="flex items-center gap-2">
+                              <span>{o.sender}</span>
+                              {o.markedBelomAwan && <CloudOff size={10} className="text-slate-500" title="Belom Awan"/>}
+                          </div>
+                          <span className="font-mono text-slate-400 text-[9px]">{o.datetime}</span>
+                      </div>
                       <div className="text-slate-600 font-mono leading-relaxed" dangerouslySetInnerHTML={{__html: o.message.replace(/\n/g, '<br>')}} />
                       {o.notes && <div className="mt-1.5 bg-amber-50 border border-amber-200 p-1.5 rounded text-[10px] text-amber-800 font-medium">📝 Catatan: {o.notes}</div>}
                   </div>
@@ -342,6 +403,7 @@ export default function App() {
                     <StatRow id="cbd" label="Pesanan mengandung CBD" countHtml={<span className="bg-purple-100 text-purple-700 px-2 py-0.5 rounded text-xs font-bold">{countCbd.length}</span>} orders={countCbd} />
                     <StatRow id="tug" label="Pesanan mengandung Tuging/Toging" countHtml={<span className="bg-orange-100 text-orange-700 px-2 py-0.5 rounded text-xs font-bold">{countTuging.length}</span>} orders={countTuging} />
                     <StatRow id="not" label="Pesanan Terdapat Catatan" countHtml={<span className="bg-amber-100 text-amber-700 px-2 py-0.5 rounded text-xs font-bold">{countNotes.length}</span>} orders={countNotes} />
+                    <StatRow id="awan" label="Pesanan Belom Awan" countHtml={<span className="bg-slate-200 text-slate-700 px-2 py-0.5 rounded text-xs font-bold flex items-center gap-1"><CloudOff size={10}/> {countBelomAwan.length}</span>} orders={countBelomAwan} />
                     <StatRow id="frb" label="Mengandung Kata Terlarang" extraBtn={<button onClick={(e) => { e.stopPropagation(); toggleModal('forbidden', true); }} className="px-2 py-0.5 bg-red-50 text-red-600 border border-red-200 rounded text-[9px] font-bold hover:bg-red-100 transition-colors flex items-center gap-1">⚙️ Daftar Kata</button>} countHtml={<span className="bg-red-100 text-red-700 px-2 py-0.5 rounded text-xs font-bold shadow-sm">{countTerlarang.length}</span>} orders={countTerlarang} />
                   </>
                 )}
@@ -412,7 +474,18 @@ export default function App() {
     return (
       <div className={`border shadow-sm rounded-xl p-3 flex flex-col h-full ${isRedFlag ? 'bg-red-50 border-red-200' : 'bg-white border-slate-200'}`}>
           <div className="mb-3">
-              <div className="flex justify-between items-center border-b border-slate-100 pb-2 mb-2"><h4 className="font-bold text-slate-800 text-xs">{o.sender}</h4><span className="text-[10px] font-mono text-slate-500">{o.datetime}</span></div>
+              <div className="flex justify-between items-start border-b border-slate-100 pb-2 mb-2">
+                  <div className="flex flex-col">
+                      <h4 className="font-bold text-slate-800 text-xs">{o.sender}</h4>
+                      {o.markedBelomAwan && <span className="inline-flex items-center gap-1 text-[9px] font-bold text-white bg-slate-700 px-1.5 py-0.5 rounded mt-1 w-max shadow-sm"><CloudOff size={10}/> Belom Awan</span>}
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                      <button onClick={(e) => toggleBelomAwanStatus(e, o.id)} className={`p-1 rounded transition-colors border ${o.markedBelomAwan ? 'bg-slate-700 text-white border-slate-700 shadow-sm' : 'bg-white text-slate-400 border-slate-200 hover:bg-slate-100 hover:text-slate-600'}`} title="Tandai Belom Awan">
+                          <CloudOff size={12}/>
+                      </button>
+                      <span className="text-[10px] font-mono text-slate-500">{o.datetime}</span>
+                  </div>
+              </div>
               <div className={`text-[11px] p-2 rounded border font-mono ${isRedFlag ? 'bg-red-100/50 text-red-900 border-red-100' : 'bg-slate-50 border-slate-100 text-slate-700'}`} dangerouslySetInnerHTML={{__html: o.message.replace(/\n/g, '<br>')}} />
           </div>
           <button onClick={() => attemptStatusToggle(o.id, activeQuickAction, true)} className={`w-full py-2 rounded-lg text-xs font-bold border transition-all mt-auto ${isPending ? 'bg-orange-100 text-orange-700 border-orange-400 scale-[1.02]' : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border-slate-200'}`}>{isPending ? 'Ketuk 1x lagi (Konfirmasi)' : 'Ketuk 2x untuk Selesai'}</button>
@@ -432,7 +505,10 @@ export default function App() {
             <tr key={order.id} className={`transition-colors group cursor-pointer ${isSelected ? 'bg-blue-50 border-blue-200' : (isRedFlag ? 'bg-red-50 border-red-100 hover:bg-red-100/50' : 'hover:bg-slate-50 border-b border-slate-100')}`} onPointerDown={(e) => handleRowPointerDown(e, order.id)} onPointerMove={handleRowPointerMove} onPointerUp={handleRowPointerUp} onPointerLeave={handleRowPointerUp}>
                 <td className="px-4 py-3"><div className="inline-flex items-center px-2 py-1 rounded bg-white border border-slate-200 text-slate-600 text-[11px] font-semibold">{order.datetime}</div></td>
                 <td className="px-4 py-3 font-semibold text-slate-800 text-xs">{order.sender}</td>
-                <td className="px-4 py-3 text-slate-700"><div className={`bg-white border p-2.5 rounded text-xs ${isRedFlag ? 'border-red-200 text-red-900' : 'border-slate-100'} ${isAllDone ? 'opacity-50 line-through' : ''}`} dangerouslySetInnerHTML={{__html: order.message.replace(/\n/g, '<br>')}}/></td>
+                <td className="px-4 py-3 text-slate-700">
+                    {order.markedBelomAwan && <div className="mb-1.5 inline-flex items-center gap-1.5 px-2 py-0.5 bg-slate-700 text-white rounded text-[10px] font-bold shadow-sm w-max"><CloudOff size={12}/> PESANAN BELOM AWAN</div>}
+                    <div className={`bg-white border p-2.5 rounded text-xs ${isRedFlag ? 'border-red-200 text-red-900' : 'border-slate-100'} ${isAllDone ? 'opacity-50 line-through' : ''}`} dangerouslySetInnerHTML={{__html: order.message.replace(/\n/g, '<br>')}}/>
+                </td>
                 <td className={`px-4 py-3 border-l border-slate-100 ${isRedFlag ? 'bg-red-50/50' : 'bg-slate-50/30'}`}>
                     <div className="grid grid-cols-2 gap-2">
                         {STATUS_ORDER.map(statusKey => {
@@ -454,7 +530,12 @@ export default function App() {
                 <td className="px-4 py-3 border-l border-slate-100 stop-long-press cursor-default align-top">
                     <div className="flex flex-col gap-2">
                         {order.notes && <div className="text-[10px] text-amber-700 bg-amber-50 p-1.5 rounded border border-amber-200 leading-tight break-words max-w-[150px]">{order.notes}</div>}
-                        <button onClick={(e) => { e.stopPropagation(); setEditData(order); toggleModal('edit', true); }} className="text-[10px] font-bold text-blue-600 hover:text-blue-800 flex items-center gap-1 transition-colors self-start bg-blue-50 px-2 py-1 rounded"><Edit size={12}/> Edit</button>
+                        <div className="flex items-center gap-2 flex-wrap">
+                            <button onClick={(e) => { e.stopPropagation(); setEditData(order); toggleModal('edit', true); }} className="text-[10px] font-bold text-blue-600 hover:text-blue-800 flex items-center gap-1 transition-colors self-start bg-blue-50 px-2 py-1 rounded border border-blue-100"><Edit size={12}/> Edit</button>
+                            <button onClick={(e) => toggleBelomAwanStatus(e, order.id)} className={`text-[10px] font-bold flex items-center gap-1 transition-colors self-start px-2 py-1 rounded border ${order.markedBelomAwan ? 'bg-slate-700 text-white border-slate-700 shadow-sm' : 'bg-slate-50 text-slate-500 border-slate-200 hover:bg-slate-100 hover:text-slate-700'}`}>
+                                <CloudOff size={12}/> {order.markedBelomAwan ? 'Belom Awan' : 'Tandai'}
+                            </button>
+                        </div>
                     </div>
                 </td>
             </tr>
@@ -464,7 +545,7 @@ export default function App() {
 
   const ModalsLayer = () => (
     <>
-      {/* 1. Modal Filter Tanggal */}
+      {/* Modals lainnya tetap sama (Diringkas agar code tetap fokus) */}
       {modals.filter && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[85] p-4" onClick={(e) => { if(e.target === e.currentTarget) toggleModal('filter', false); }}>
             <div className="bg-white rounded-2xl shadow-xl w-full max-w-xs overflow-hidden transform scale-100 transition-all">
@@ -478,7 +559,6 @@ export default function App() {
         </div>
       )}
 
-      {/* 2. Modal Konfirmasi Global (Confirm Dialog) */}
       {confirmDialog.visible && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
             <div className="bg-white rounded-2xl shadow-xl p-6 max-w-sm w-full">
@@ -495,7 +575,6 @@ export default function App() {
         </div>
       )}
 
-      {/* 3. Modal Edit Data */}
       {modals.edit && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[85] p-4">
             <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg">
@@ -513,7 +592,6 @@ export default function App() {
         </div>
       )}
 
-      {/* 4. Modal Quick Note */}
       {modals.quickNote && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[95] p-4">
             <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm">
@@ -524,7 +602,6 @@ export default function App() {
         </div>
       )}
 
-      {/* 5. Modal Master Database (Lihat Semua) */}
       {modals.master && (
         <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex flex-col items-center justify-center z-[90] px-2 py-4">
             <div className="bg-white rounded-xl shadow-2xl w-full max-w-6xl h-[95vh] flex flex-col">
@@ -538,7 +615,7 @@ export default function App() {
                         <tbody className="bg-white text-xs divide-y divide-slate-100">
                             {ordersData.length === 0 ? <tr><td colSpan="6" className="px-4 py-8 text-center text-slate-500 italic">Database Kosong.</td></tr> : [...ordersData].sort((a,b) => getSortableTime(b.datetime) - getSortableTime(a.datetime)).map((o, i) => (
                                 <tr key={o.id} className="hover:bg-slate-50">
-                                    <td className="px-4 py-2 font-mono text-slate-400">{i + 1}</td><td className="px-4 py-2 font-mono text-slate-600">{o.datetime}</td><td className="px-4 py-2 font-bold text-slate-700">{o.sender}</td>
+                                    <td className="px-4 py-2 font-mono text-slate-400">{i + 1}</td><td className="px-4 py-2 font-mono text-slate-600">{o.datetime}</td><td className="px-4 py-2 font-bold text-slate-700">{o.sender} {o.markedBelomAwan && <CloudOff size={10} className="inline text-slate-400 ml-1"/>}</td>
                                     <td className="px-4 py-2"><div className="max-h-16 overflow-y-auto bg-slate-50 border p-1.5 rounded" dangerouslySetInnerHTML={{__html: o.message.replace(/\n/g, '<br>')}}/></td>
                                     <td className="px-4 py-2">{o.notes ? <div className="text-[10px] text-amber-700 bg-amber-50 p-1.5 rounded border border-amber-200">{o.notes}</div> : <span className="text-slate-300 italic text-[10px]">Kosong</span>}</td>
                                     <td className="px-4 py-2 text-center text-[10px] whitespace-nowrap">{STATUS_ORDER.map(k => o.status[k] ? <span key={k} className="text-blue-600 font-bold border border-blue-200 bg-blue-50 px-1 rounded shadow-sm mx-0.5">{STATUS_NAMES[k]}</span> : <span key={k} className="text-slate-300 mx-0.5">-</span>)}</td>
@@ -552,7 +629,6 @@ export default function App() {
         </div>
       )}
 
-      {/* 6. Modal Duplicate Data */}
       {modals.duplicate && (
         <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-sm flex flex-col items-center justify-center z-[70] p-4">
             <div className="bg-slate-50 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
@@ -580,7 +656,6 @@ export default function App() {
         </div>
       )}
 
-      {/* 7. Modal Kata Terlarang */}
       {modals.forbidden && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[85] p-4">
             <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm">
@@ -605,7 +680,7 @@ export default function App() {
   );
 
   return (
-    <div className="bg-slate-50 text-slate-800 min-h-screen p-3 md:p-8 pb-40 font-sans selection:bg-blue-200">
+    <div className="bg-slate-50 text-slate-800 min-h-screen p-3 md:p-8 pb-40 font-sans selection:bg-blue-200 relative">
       <Header />
       
       <main className="max-w-6xl mx-auto flex flex-col gap-4 relative z-0">
@@ -671,8 +746,7 @@ export default function App() {
 
       </main>
 
-      {}
-      <footer className="max-w-6xl mx-auto mt-8 mb-12 flex flex-col items-center gap-4 px-4 relative z-0">
+      <footer className="max-w-6xl mx-auto mt-8 mb-12 flex flex-col items-center gap-4 px-4 relative z-0" id="bottom-footer">
           <div className="flex flex-wrap justify-center items-center gap-3 w-full">
               <input type="file" ref={fileInputRef} className="hidden" accept=".json" onChange={handleImportFile} />
               <button onClick={() => fileInputRef.current.click()} className="flex-1 sm:flex-none px-4 py-2 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg text-xs font-bold shadow-sm flex items-center justify-center gap-1.5 hover:bg-emerald-100"><FileDown size={14}/> Impor Data</button>
@@ -683,6 +757,23 @@ export default function App() {
           </div>
           <p className="text-[10px] text-slate-400 mt-2 text-center">Seluruh data Anda tersimpan aman secara lokal di dalam memori browser (Offline).</p>
       </footer>
+
+      {/* SMART SCROLL BUTTONS */}
+      {/* Scroll to Top */}
+      <button 
+        onClick={scrollToTop} 
+        className={`fixed top-8 left-1/2 transform -translate-x-1/2 bg-slate-900/90 backdrop-blur-sm text-white px-4 py-2 rounded-full shadow-[0_8px_30px_rgb(0,0,0,0.12)] flex items-center gap-1.5 transition-all duration-300 z-50 border border-slate-700 hover:bg-black hover:scale-105 ${showScrollTop ? 'translate-y-0 opacity-100 pointer-events-auto' : '-translate-y-12 opacity-0 pointer-events-none'}`}
+      >
+        <ArrowUp size={14} strokeWidth={3} /> <span className="text-[11px] font-bold uppercase tracking-wider">Ke Atas</span>
+      </button>
+
+      {/* Scroll to Bottom */}
+      <button 
+        onClick={scrollToBottom} 
+        className={`fixed bottom-24 left-1/2 transform -translate-x-1/2 bg-slate-900/90 backdrop-blur-sm text-white px-4 py-2 rounded-full shadow-[0_8px_30px_rgb(0,0,0,0.12)] flex items-center gap-1.5 transition-all duration-300 z-50 border border-slate-700 hover:bg-black hover:scale-105 ${showScrollBottom ? 'translate-y-0 opacity-100 pointer-events-auto' : 'translate-y-12 opacity-0 pointer-events-none'}`}
+      >
+        <ArrowDown size={14} strokeWidth={3} /> <span className="text-[11px] font-bold uppercase tracking-wider">Ke Bawah</span>
+      </button>
 
       {/* Floating Toolbar (Bulk Select) */}
       <div className={`fixed bottom-6 md:bottom-10 left-1/2 transform -translate-x-1/2 bg-slate-900 text-white shadow-2xl rounded-full px-5 py-3 flex items-center gap-4 transition-all duration-300 z-[55] w-max ${selectedOrderIds.size > 0 ? 'translate-y-0 opacity-100 pointer-events-auto' : 'translate-y-24 opacity-0 pointer-events-none'}`}>
