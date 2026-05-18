@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Search, X, Plus, Trash2, Filter, Settings, FileDown, FileUp, Database, Edit, ChevronDown, Check, AlertCircle, Info, ChevronRight, AlertTriangle, CloudOff, ArrowUp, ArrowDown } from 'lucide-react';
+import { Search, X, Plus, Trash2, Filter, Settings, FileDown, FileUp, Database, Edit, ChevronDown, Check, AlertCircle, Info, ChevronRight, AlertTriangle, CloudOff, ArrowUp, ArrowDown, StickyNote } from 'lucide-react';
 
 const STATUS_ORDER = ['alokasi', 'suratJalan', 'integrasi', 'terarsip'];
 const STATUS_NAMES = { alokasi: 'Alokasi', suratJalan: 'S. Jalan', integrasi: 'Integrasi', terarsip: 'Terarsip' };
@@ -8,6 +8,8 @@ const DEFAULT_FORBIDDEN = ['mitra', 'swalayan'];
 export default function App() {
   const [ordersData, setOrdersData] = useState([]);
   const [forbiddenWords, setForbiddenWords] = useState(DEFAULT_FORBIDDEN);
+  const [appNotes, setAppNotes] = useState([]);
+  
   const [dateFilter, setDateFilter] = useState({ start: null, end: null });
   const [sortConfig, setSortConfig] = useState({ key: 'timestamp', direction: 'desc' });
   const [searchQuery, setSearchQuery] = useState('');
@@ -28,14 +30,17 @@ export default function App() {
   const [selectedOrderIds, setSelectedOrderIds] = useState(new Set());
   const [activeQuickAction, setActiveQuickAction] = useState(null);
   const [qaViewMode, setQaViewMode] = useState('time');
-  const [pendingTaps, setPendingTaps] = useState({}); // Tracking double taps
+  const [pendingTaps, setPendingTaps] = useState({});
   
-  const [modals, setModals] = useState({ filter: false, master: false, edit: false, duplicate: false, quickNote: false, forbidden: false });
+  const [modals, setModals] = useState({ filter: false, master: false, edit: false, duplicate: false, quickNote: false, forbidden: false, appNotesModal: false });
   const [confirmDialog, setConfirmDialog] = useState({ visible: false, title: '', message: '', onConfirm: null, type: 'danger' });
   
   // Modal Specific Data
   const [editData, setEditData] = useState({ id: '', datetime: '', sender: '', message: '', notes: '' });
   const [quickNoteData, setQuickNoteData] = useState({ id: null, text: '' });
+  const [newAppNoteText, setNewAppNoteText] = useState('');
+  const [editingAppNoteId, setEditingAppNoteId] = useState(null);
+
   const [pendingDuplicates, setPendingDuplicates] = useState([]);
   const [duplicateDecisions, setDuplicateDecisions] = useState({});
   const [newForbiddenWord, setNewForbiddenWord] = useState('');
@@ -46,6 +51,7 @@ export default function App() {
   const tapTimers = useRef({});
   const longPressTimer = useRef(null);
   const isDragging = useRef(false);
+  const isLongPressTriggered = useRef(false);
   const toastTimeout = useRef(null);
   const scrollTimer = useRef(null);
   const lastScrollY = useRef(0);
@@ -64,6 +70,10 @@ export default function App() {
       }
       const savedForbidden = localStorage.getItem('forbiddenWords_react_v2');
       if (savedForbidden) setForbiddenWords(JSON.parse(savedForbidden));
+      
+      const savedAppNotes = localStorage.getItem('appNotes_react_v2');
+      if (savedAppNotes) setAppNotes(JSON.parse(savedAppNotes));
+
     } catch (e) {
       console.error("Gagal memuat data lokal:", e);
     }
@@ -71,6 +81,7 @@ export default function App() {
 
   useEffect(() => { localStorage.setItem('ordersData_react_v2', JSON.stringify(ordersData)); }, [ordersData]);
   useEffect(() => { localStorage.setItem('forbiddenWords_react_v2', JSON.stringify(forbiddenWords)); }, [forbiddenWords]);
+  useEffect(() => { localStorage.setItem('appNotes_react_v2', JSON.stringify(appNotes)); }, [appNotes]);
 
   // Smart Scroll Listener
   useEffect(() => {
@@ -79,19 +90,15 @@ export default function App() {
       const maxY = document.documentElement.scrollHeight - window.innerHeight;
       const diff = currentY - lastScrollY.current;
 
-      // Hanya deteksi jika scroll cukup signifikan (minimal 10px) untuk hindari getaran halus
       if (Math.abs(diff) > 10) {
           if (diff < 0 && currentY > 300) {
-              // Scrolling UP
               setShowScrollTop(true);
               setShowScrollBottom(false);
           } else if (diff > 0 && currentY < maxY - 300) {
-              // Scrolling DOWN
               setShowScrollBottom(true);
               setShowScrollTop(false);
           }
 
-          // Auto-hide tombol setelah 2.5 detik berhenti scroll
           if (scrollTimer.current) clearTimeout(scrollTimer.current);
           scrollTimer.current = setTimeout(() => {
               setShowScrollTop(false);
@@ -120,6 +127,57 @@ export default function App() {
   const showConfirm = (title, message, onConfirm, type = 'danger') => setConfirmDialog({ visible: true, title, message, onConfirm, type });
   const closeConfirm = () => setConfirmDialog(prev => ({ ...prev, visible: false }));
   const toggleModal = (modalName, value) => setModals(prev => ({ ...prev, [modalName]: value !== undefined ? value : !prev[modalName] }));
+
+  // FUNGSI CATATAN APLIKASI
+  const handleSaveAppNote = () => {
+      if (!newAppNoteText.trim()) return showToast("Catatan tidak boleh kosong!", "error");
+      
+      if (editingAppNoteId) {
+          setAppNotes(prev => prev.map(note => note.id === editingAppNoteId ? { ...note, text: newAppNoteText, updatedAt: new Date().toISOString() } : note));
+          showToast("Catatan diperbarui!");
+      } else {
+          const newNote = {
+              id: 'note_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
+              text: newAppNoteText,
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString()
+          };
+          setAppNotes(prev => [newNote, ...prev]);
+          showToast("Catatan baru ditambahkan!");
+      }
+      setNewAppNoteText('');
+      setEditingAppNoteId(null);
+  };
+
+  const handleEditAppNoteClick = (note) => {
+      setNewAppNoteText(note.text);
+      setEditingAppNoteId(note.id);
+  };
+
+  const handleDeleteAppNote = (noteId) => {
+      showConfirm("Hapus Catatan?", "Yakin ingin menghapus catatan aplikasi ini?", () => {
+          setAppNotes(prev => prev.filter(n => n.id !== noteId));
+          if (editingAppNoteId === noteId) {
+              setNewAppNoteText('');
+              setEditingAppNoteId(null);
+          }
+          showToast("Catatan terhapus.");
+          closeConfirm();
+      });
+  };
+  const cancelEditAppNote = () => {
+      setNewAppNoteText('');
+      setEditingAppNoteId(null);
+  };
+
+
+  const parseLocalTimeDateInput = (val) => {
+    if (!val) return null;
+    const [y, m, d] = val.split('-');
+    const dt = new Date(y, m - 1, d);
+    dt.setHours(0, 0, 0, 0); 
+    return dt.getTime();
+  };
 
   const parseWhatsAppDateToJSDate = (dtStr) => {
     const match = dtStr.match(/(\d+)\/(\d+),\s*(\d+)\.(\d+)/);
@@ -266,12 +324,32 @@ export default function App() {
   const handleRowPointerDown = (e, orderId) => {
     if (e.target.closest('.stop-long-press')) return; 
     isDragging.current = false;
-    longPressTimer.current = setTimeout(() => { 
-      if (!isDragging.current) { toggleSelection(orderId); if(navigator.vibrate) navigator.vibrate(50); } 
-    }, 500); 
+    isLongPressTriggered.current = false;
+
+    if (selectedOrderIds.size === 0) {
+        longPressTimer.current = setTimeout(() => { 
+            if (!isDragging.current) { 
+                isLongPressTriggered.current = true;
+                toggleSelection(orderId); 
+                if(navigator.vibrate) navigator.vibrate(50); 
+            } 
+        }, 500); 
+    }
   };
-  const handleRowPointerMove = () => { isDragging.current = true; clearTimeout(longPressTimer.current); };
-  const handleRowPointerUp = () => clearTimeout(longPressTimer.current);
+  
+  const handleRowPointerMove = () => { 
+    isDragging.current = true; 
+    clearTimeout(longPressTimer.current); 
+  };
+  
+  const handleRowPointerUp = (e, orderId) => { 
+    clearTimeout(longPressTimer.current);
+    if (e.target.closest('.stop-long-press')) return;
+
+    if (!isDragging.current && !isLongPressTriggered.current && selectedOrderIds.size > 0) {
+        toggleSelection(orderId);
+    }
+  };
 
   const toggleSelection = (orderId) => { setSelectedOrderIds(prev => { const next = new Set(prev); next.has(orderId) ? next.delete(orderId) : next.add(orderId); return next; }); };
   const handleSelectAll = () => { selectedOrderIds.size === sortedAndFilteredOrders.length ? setSelectedOrderIds(new Set()) : setSelectedOrderIds(new Set(sortedAndFilteredOrders.map(o => o.id))); };
@@ -324,23 +402,39 @@ export default function App() {
     return text;
   };
 
-  const Header = () => (
+  // ----- BLOK FUNGSI RENDER (Solusi Bug Keyboard Tertutup) -----
+  
+  const renderHeader = () => (
     <header className="max-w-6xl mx-auto mb-3 relative z-20" id="top-header">
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 py-3 px-4 md:px-5 flex items-center justify-between relative z-10">
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 py-3 px-4 md:px-5 flex flex-col md:flex-row md:items-center justify-between relative z-10 gap-3">
             <h1 className="text-lg md:text-xl font-bold text-slate-900 flex items-center gap-2">📦 <span className="hidden sm:inline">Order Management System</span><span className="sm:hidden">OMS</span></h1>
-            <div className="flex items-center gap-2 md:gap-3">
-                <span className="text-[11px] font-medium text-slate-400 hidden md:block">{renderHeaderDateText()}</span>
-                <span className="bg-blue-100 text-blue-700 text-xs font-bold px-3 py-1.5 rounded-full shrink-0">{filteredOrders.length} Pesanan</span>
+            <div className="flex items-center gap-2 flex-wrap md:flex-nowrap">
+                <span className="text-[11px] font-medium text-slate-400 hidden lg:block mr-2">{renderHeaderDateText()}</span>
+                
+                <button 
+                    onClick={() => toggleModal('appNotesModal')} 
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-full transition-colors text-amber-700 font-semibold text-xs"
+                >
+                    <StickyNote size={14} /> 
+                    <span className="hidden sm:inline">Catatan</span>
+                    {appNotes.length > 0 && <span className="bg-amber-500 text-white text-[10px] px-1.5 py-0.5 rounded-full font-bold shadow-sm">{appNotes.length}</span>}
+                </button>
+
+                <button onClick={() => toggleModal('filter')} className="md:hidden flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-full transition-colors text-slate-600 font-semibold text-xs">
+                    <Filter size={14} /> <span className="hidden sm:inline">Filter</span>
+                </button>
+                
+                <span className="bg-blue-100 text-blue-700 text-xs font-bold px-3 py-1.5 rounded-full shrink-0 shadow-sm ml-auto md:ml-0">{filteredOrders.length} Pesanan</span>
             </div>
         </div>
-        <div className="flex justify-between items-center mt-1.5 px-2 relative z-0">
-            <div className="md:hidden text-[10px] font-medium text-slate-400">{renderHeaderDateText()}</div>
-            <button onClick={() => toggleModal('filter')} className="ml-auto text-[11px] font-bold text-slate-500 hover:text-slate-800 flex items-center gap-1.5 transition-colors cursor-pointer px-2 py-1 rounded hover:bg-slate-200/50"><Filter size={14} /> Filter</button>
+        <div className="hidden md:flex justify-between items-center mt-1.5 px-2 relative z-0">
+            <div className="text-[10px] font-medium text-slate-400">{renderHeaderDateText()}</div>
+            <button onClick={() => toggleModal('filter')} className="ml-auto text-[11px] font-bold text-slate-500 hover:text-slate-800 flex items-center gap-1.5 transition-colors cursor-pointer px-2 py-1 rounded hover:bg-slate-200/50"><Filter size={14} /> Filter Tanggal</button>
         </div>
     </header>
   );
 
-  const StatsSection = () => {
+  const renderStatsSection = () => {
     if (filteredOrders.length === 0) return <div className="text-sm text-slate-500 p-4 text-center">Memuat statistik... / Tidak ada data</div>;
     const total = filteredOrders.length;
     const countCbd = filteredOrders.filter(o => /cbd/i.test(o.message));
@@ -355,8 +449,8 @@ export default function App() {
 
     const toggleStatDetail = (id) => setStatDetailOpen(p => ({ ...p, [id]: !p[id] }));
 
-    const StatRow = ({ id, label, countHtml, orders, extraBtn = null }) => (
-      <div className="py-2.5 border-b border-slate-100 last:border-0">
+    const renderStatRow = ({ rowKey, id, label, countHtml, orders, extraBtn = null }) => (
+      <div key={rowKey || id} className="py-2.5 border-b border-slate-100 last:border-0">
           <div className="flex justify-between items-center px-2 py-1.5 rounded group">
               <div className="flex items-center gap-2">
                   <span onClick={() => toggleStatDetail(id)} className="text-xs font-bold text-slate-700 hover:text-blue-600 transition-colors cursor-pointer">{label}</span>
@@ -399,16 +493,16 @@ export default function App() {
               <div className="flex flex-col px-2 border border-slate-100 rounded-b-lg -mt-1 mb-2 pt-1 bg-white">
                 {group.key === 'umum' && (
                   <>
-                    <StatRow id="tot" label="Total Keseluruhan" countHtml={<span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded text-xs font-bold">{total}</span>} orders={filteredOrders} />
-                    <StatRow id="cbd" label="Pesanan mengandung CBD" countHtml={<span className="bg-purple-100 text-purple-700 px-2 py-0.5 rounded text-xs font-bold">{countCbd.length}</span>} orders={countCbd} />
-                    <StatRow id="tug" label="Pesanan mengandung Tuging/Toging" countHtml={<span className="bg-orange-100 text-orange-700 px-2 py-0.5 rounded text-xs font-bold">{countTuging.length}</span>} orders={countTuging} />
-                    <StatRow id="not" label="Pesanan Terdapat Catatan" countHtml={<span className="bg-amber-100 text-amber-700 px-2 py-0.5 rounded text-xs font-bold">{countNotes.length}</span>} orders={countNotes} />
-                    <StatRow id="awan" label="Pesanan Belom Awan" countHtml={<span className="bg-slate-200 text-slate-700 px-2 py-0.5 rounded text-xs font-bold flex items-center gap-1"><CloudOff size={10}/> {countBelomAwan.length}</span>} orders={countBelomAwan} />
-                    <StatRow id="frb" label="Mengandung Kata Terlarang" extraBtn={<button onClick={(e) => { e.stopPropagation(); toggleModal('forbidden', true); }} className="px-2 py-0.5 bg-red-50 text-red-600 border border-red-200 rounded text-[9px] font-bold hover:bg-red-100 transition-colors flex items-center gap-1">⚙️ Daftar Kata</button>} countHtml={<span className="bg-red-100 text-red-700 px-2 py-0.5 rounded text-xs font-bold shadow-sm">{countTerlarang.length}</span>} orders={countTerlarang} />
+                    {renderStatRow({ id: 'tot', label: 'Total Keseluruhan', countHtml: <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded text-xs font-bold">{total}</span>, orders: filteredOrders })}
+                    {renderStatRow({ id: 'cbd', label: 'Pesanan mengandung CBD', countHtml: <span className="bg-purple-100 text-purple-700 px-2 py-0.5 rounded text-xs font-bold">{countCbd.length}</span>, orders: countCbd })}
+                    {renderStatRow({ id: 'tug', label: 'Pesanan mengandung Tuging/Toging', countHtml: <span className="bg-orange-100 text-orange-700 px-2 py-0.5 rounded text-xs font-bold">{countTuging.length}</span>, orders: countTuging })}
+                    {renderStatRow({ id: 'not', label: 'Pesanan Terdapat Catatan', countHtml: <span className="bg-amber-100 text-amber-700 px-2 py-0.5 rounded text-xs font-bold">{countNotes.length}</span>, orders: countNotes })}
+                    {renderStatRow({ id: 'awan', label: 'Pesanan Belom Awan', countHtml: <span className="bg-slate-200 text-slate-700 px-2 py-0.5 rounded text-xs font-bold flex items-center gap-1"><CloudOff size={10}/> {countBelomAwan.length}</span>, orders: countBelomAwan })}
+                    {renderStatRow({ id: 'frb', label: 'Mengandung Kata Terlarang', extraBtn: <button onClick={(e) => { e.stopPropagation(); toggleModal('forbidden', true); }} className="px-2 py-0.5 bg-red-50 text-red-600 border border-red-200 rounded text-[9px] font-bold hover:bg-red-100 transition-colors flex items-center gap-1">⚙️ Daftar Kata</button>, countHtml: <span className="bg-red-100 text-red-700 px-2 py-0.5 rounded text-xs font-bold shadow-sm">{countTerlarang.length}</span>, orders: countTerlarang })}
                   </>
                 )}
-                {group.key === 'sender' && sortedSenders.map(([s, ords], i) => <StatRow key={i} id={`snd_${i}`} label={s} countHtml={<span className="bg-slate-200 text-slate-700 px-2 py-0.5 rounded text-xs font-bold">{ords.length}</span>} orders={ords} />)}
-                {group.key === 'status' && statusStats.map(s => <StatRow key={s.key} id={`sts_${s.key}`} label={`Selesai ${s.name}`} countHtml={<div className="flex items-center gap-1.5"><span className="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded text-xs font-bold">{s.done.length}</span><span className="text-[10px] text-slate-500 font-medium border bg-white px-1.5 py-0.5 rounded shadow-sm">(Belum: {s.belum})</span></div>} orders={s.done} />)}
+                {group.key === 'sender' && sortedSenders.map(([s, ords], i) => renderStatRow({ rowKey: `snd_${i}`, id: `snd_${i}`, label: s, countHtml: <span className="bg-slate-200 text-slate-700 px-2 py-0.5 rounded text-xs font-bold">{ords.length}</span>, orders: ords }))}
+                {group.key === 'status' && statusStats.map(s => renderStatRow({ rowKey: `sts_${s.key}`, id: `sts_${s.key}`, label: `Selesai ${s.name}`, countHtml: <div className="flex items-center gap-1.5"><span className="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded text-xs font-bold">{s.done.length}</span><span className="text-[10px] text-slate-500 font-medium border bg-white px-1.5 py-0.5 rounded shadow-sm">(Belum: {s.belum})</span></div>, orders: s.done }))}
               </div>
             )}
           </div>
@@ -417,7 +511,32 @@ export default function App() {
     );
   };
 
-  const QuickActions = () => {
+  const renderQACard = (key, o, activeQuickAction) => {
+    const isRedFlag = !o.approvedForbidden && containsForbiddenWords(o.message).found;
+    const isPending = pendingTaps[`qa_${o.id}_${activeQuickAction}`];
+    return (
+      <div key={key} className={`border shadow-sm rounded-xl p-3 flex flex-col h-full ${isRedFlag ? 'bg-red-50 border-red-200' : 'bg-white border-slate-200'}`}>
+          <div className="mb-3">
+              <div className="flex justify-between items-start border-b border-slate-100 pb-2 mb-2">
+                  <div className="flex flex-col">
+                      <h4 className="font-bold text-slate-800 text-xs">{o.sender}</h4>
+                      {o.markedBelomAwan && <span className="inline-flex items-center gap-1 text-[9px] font-bold text-white bg-slate-700 px-1.5 py-0.5 rounded mt-1 w-max shadow-sm"><CloudOff size={10}/> Belom Awan</span>}
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                      <button onClick={(e) => toggleBelomAwanStatus(e, o.id)} className={`p-1 rounded transition-colors border ${o.markedBelomAwan ? 'bg-slate-700 text-white border-slate-700 shadow-sm' : 'bg-white text-slate-400 border-slate-200 hover:bg-slate-100 hover:text-slate-600'}`} title="Tandai Belom Awan">
+                          <CloudOff size={12}/>
+                      </button>
+                      <span className="text-[10px] font-mono text-slate-500">{o.datetime}</span>
+                  </div>
+              </div>
+              <div className={`text-[11px] p-2 rounded border font-mono ${isRedFlag ? 'bg-red-100/50 text-red-900 border-red-100' : 'bg-slate-50 border-slate-100 text-slate-700'}`} dangerouslySetInnerHTML={{__html: o.message.replace(/\n/g, '<br>')}} />
+          </div>
+          <button onClick={() => attemptStatusToggle(o.id, activeQuickAction, true)} className={`w-full py-2 rounded-lg text-xs font-bold border transition-all mt-auto ${isPending ? 'bg-orange-100 text-orange-700 border-orange-400 scale-[1.02]' : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border-slate-200'}`}>{isPending ? 'Ketuk 1x lagi (Konfirmasi)' : 'Ketuk 2x untuk Selesai'}</button>
+      </div>
+    )
+  };
+
+  const renderQuickActions = () => {
     const getEligible = (key) => filteredOrders.filter(o => {
         if (key === 'alokasi') return !o.status.alokasi;
         if (key === 'suratJalan') return o.status.alokasi && !o.status.suratJalan;
@@ -454,11 +573,11 @@ export default function App() {
           
           {activeQuickAction && pendingOrders.length > 0 && (
             <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3">
-                {qaViewMode === 'time' ? pendingOrders.map(o => <QACard key={o.id} o={o} activeQuickAction={activeQuickAction} />) : 
+                {qaViewMode === 'time' ? pendingOrders.map(o => renderQACard(o.id, o, activeQuickAction)) : 
                     Object.entries(pendingOrders.reduce((acc, o) => { (acc[o.sender] = acc[o.sender] || []).push(o); return acc; }, {})).map(([sender, orders]) => (
                         <React.Fragment key={sender}>
                             <div className="col-span-full mt-2 mb-0.5"><h3 className="text-xs font-bold text-slate-700 border-b pb-1 flex items-center gap-1">👤 {sender} <span className="bg-slate-100 px-1.5 py-0.5 rounded text-[10px]">{orders.length}</span></h3></div>
-                            {orders.map(o => <QACard key={o.id} o={o} activeQuickAction={activeQuickAction} />)}
+                            {orders.map(o => renderQACard(o.id, o, activeQuickAction))}
                         </React.Fragment>
                     ))
                 }
@@ -468,31 +587,7 @@ export default function App() {
     );
   };
 
-  const QACard = ({ o, activeQuickAction }) => {
-    const isRedFlag = !o.approvedForbidden && containsForbiddenWords(o.message).found;
-    const isPending = pendingTaps[`qa_${o.id}_${activeQuickAction}`];
-    return (
-      <div className={`border shadow-sm rounded-xl p-3 flex flex-col h-full ${isRedFlag ? 'bg-red-50 border-red-200' : 'bg-white border-slate-200'}`}>
-          <div className="mb-3">
-              <div className="flex justify-between items-start border-b border-slate-100 pb-2 mb-2">
-                  <div className="flex flex-col">
-                      <h4 className="font-bold text-slate-800 text-xs">{o.sender}</h4>
-                      {o.markedBelomAwan && <span className="inline-flex items-center gap-1 text-[9px] font-bold text-white bg-slate-700 px-1.5 py-0.5 rounded mt-1 w-max shadow-sm"><CloudOff size={10}/> Belom Awan</span>}
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                      <button onClick={(e) => toggleBelomAwanStatus(e, o.id)} className={`p-1 rounded transition-colors border ${o.markedBelomAwan ? 'bg-slate-700 text-white border-slate-700 shadow-sm' : 'bg-white text-slate-400 border-slate-200 hover:bg-slate-100 hover:text-slate-600'}`} title="Tandai Belom Awan">
-                          <CloudOff size={12}/>
-                      </button>
-                      <span className="text-[10px] font-mono text-slate-500">{o.datetime}</span>
-                  </div>
-              </div>
-              <div className={`text-[11px] p-2 rounded border font-mono ${isRedFlag ? 'bg-red-100/50 text-red-900 border-red-100' : 'bg-slate-50 border-slate-100 text-slate-700'}`} dangerouslySetInnerHTML={{__html: o.message.replace(/\n/g, '<br>')}} />
-          </div>
-          <button onClick={() => attemptStatusToggle(o.id, activeQuickAction, true)} className={`w-full py-2 rounded-lg text-xs font-bold border transition-all mt-auto ${isPending ? 'bg-orange-100 text-orange-700 border-orange-400 scale-[1.02]' : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border-slate-200'}`}>{isPending ? 'Ketuk 1x lagi (Konfirmasi)' : 'Ketuk 2x untuk Selesai'}</button>
-      </div>
-    )
-  };
-
+  // FUNGSI RENDER TABEL (YANG SEBELUMNYA TIDAK SENGAJA TERHAPUS)
   const renderTableRows = () => {
     if (sortedAndFilteredOrders.length === 0) return <tr><td colSpan="5" className="py-12 text-center text-slate-500 font-medium text-sm">Tidak ada data.</td></tr>;
 
@@ -502,7 +597,12 @@ export default function App() {
         const isRedFlag = !order.approvedForbidden && containsForbiddenWords(order.message).found;
 
         return (
-            <tr key={order.id} className={`transition-colors group cursor-pointer ${isSelected ? 'bg-blue-50 border-blue-200' : (isRedFlag ? 'bg-red-50 border-red-100 hover:bg-red-100/50' : 'hover:bg-slate-50 border-b border-slate-100')}`} onPointerDown={(e) => handleRowPointerDown(e, order.id)} onPointerMove={handleRowPointerMove} onPointerUp={handleRowPointerUp} onPointerLeave={handleRowPointerUp}>
+            <tr key={order.id} className={`transition-colors group cursor-pointer ${isSelected ? 'bg-blue-50 border-blue-200' : (isRedFlag ? 'bg-red-50 border-red-100 hover:bg-red-100/50' : 'hover:bg-slate-50 border-b border-slate-100')}`} 
+                onPointerDown={(e) => handleRowPointerDown(e, order.id)} 
+                onPointerMove={handleRowPointerMove} 
+                onPointerUp={(e) => handleRowPointerUp(e, order.id)} 
+                onPointerLeave={() => clearTimeout(longPressTimer.current)}>
+                
                 <td className="px-4 py-3"><div className="inline-flex items-center px-2 py-1 rounded bg-white border border-slate-200 text-slate-600 text-[11px] font-semibold">{order.datetime}</div></td>
                 <td className="px-4 py-3 font-semibold text-slate-800 text-xs">{order.sender}</td>
                 <td className="px-4 py-3 text-slate-700">
@@ -543,16 +643,78 @@ export default function App() {
     });
   };
 
-  const ModalsLayer = () => (
+  const renderModals = () => (
     <>
-      {/* Modals lainnya tetap sama (Diringkas agar code tetap fokus) */}
+      {modals.appNotesModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[95] p-4" onClick={(e) => { if(e.target === e.currentTarget) toggleModal('appNotesModal', false); }}>
+            <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg h-[80vh] flex flex-col overflow-hidden">
+                <div className="p-4 border-b bg-amber-50 flex justify-between items-center shrink-0">
+                    <h3 className="text-sm font-bold text-amber-800 flex items-center gap-2"><StickyNote size={16}/> Catatan Aplikasi</h3>
+                    <button onClick={() => toggleModal('appNotesModal', false)} className="w-7 h-7 rounded-full bg-amber-100 flex items-center justify-center text-amber-700 hover:bg-amber-200 transition-colors"><X size={14}/></button>
+                </div>
+                
+                <div className="p-4 border-b border-slate-100 bg-white shrink-0">
+                    <label className="block text-[11px] font-bold text-slate-500 mb-1.5">{editingAppNoteId ? 'Edit Catatan:' : 'Tambah Catatan Baru:'}</label>
+                    <textarea 
+                        value={newAppNoteText} 
+                        onChange={(e) => setNewAppNoteText(e.target.value)} 
+                        rows="3" 
+                        className={`w-full border rounded-lg text-xs py-2 px-3 outline-none resize-none focus:ring-2 ${editingAppNoteId ? 'bg-blue-50 border-blue-200 focus:ring-blue-500' : 'bg-slate-50 border-slate-200 focus:ring-amber-500'}`} 
+                        placeholder="Ketik pengingat, to-do list, atau informasi penting di sini..."
+                    ></textarea>
+                    <div className="flex justify-end gap-2 mt-2">
+                        {editingAppNoteId && <button onClick={cancelEditAppNote} className="px-3 py-1.5 text-[11px] font-bold text-slate-500 bg-slate-100 rounded hover:bg-slate-200">Batal Edit</button>}
+                        <button onClick={handleSaveAppNote} className={`px-4 py-1.5 text-[11px] font-bold text-white rounded shadow-sm ${editingAppNoteId ? 'bg-blue-600 hover:bg-blue-700' : 'bg-amber-500 hover:bg-amber-600'}`}>{editingAppNoteId ? 'Simpan Perubahan' : 'Tambahkan'}</button>
+                    </div>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-4 bg-slate-50 scrollbar-thin">
+                    {appNotes.length === 0 ? (
+                        <div className="h-full flex flex-col items-center justify-center text-slate-400">
+                            <StickyNote size={32} className="mb-2 opacity-50"/>
+                            <p className="text-xs font-medium">Belum ada catatan.</p>
+                        </div>
+                    ) : (
+                        <div className="flex flex-col gap-3">
+                            {appNotes.map(note => {
+                                const d = new Date(note.createdAt);
+                                const dateString = `${d.getDate()}/${d.getMonth()+1}/${d.getFullYear()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+                                const isEditing = editingAppNoteId === note.id;
+                                
+                                return (
+                                    <div key={note.id} className={`p-3 rounded-lg border shadow-sm ${isEditing ? 'bg-blue-50 border-blue-200 ring-1 ring-blue-500' : 'bg-white border-slate-200'}`}>
+                                        <div className="text-[11px] text-slate-700 whitespace-pre-wrap leading-relaxed" dangerouslySetInnerHTML={{__html: note.text.replace(/\n/g, '<br>')}} />
+                                        <div className="flex justify-between items-end mt-3 pt-2 border-t border-slate-100">
+                                            <span className="text-[9px] font-mono text-slate-400">{dateString}</span>
+                                            <div className="flex gap-2">
+                                                <button onClick={() => handleEditAppNoteClick(note)} className="text-blue-600 hover:text-blue-800 p-1 bg-blue-50 rounded" title="Edit"><Edit size={12}/></button>
+                                                <button onClick={() => handleDeleteAppNote(note.id)} className="text-red-600 hover:text-red-800 p-1 bg-red-50 rounded" title="Hapus"><Trash2 size={12}/></button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )
+                            })}
+                        </div>
+                    )}
+                </div>
+            </div>
+        </div>
+      )}
+
       {modals.filter && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[85] p-4" onClick={(e) => { if(e.target === e.currentTarget) toggleModal('filter', false); }}>
             <div className="bg-white rounded-2xl shadow-xl w-full max-w-xs overflow-hidden transform scale-100 transition-all">
                 <div className="p-4 border-b bg-slate-50 flex justify-between items-center"><h3 className="text-sm font-bold text-slate-800 flex items-center gap-2"><Filter size={16}/> Filter Data</h3><button onClick={() => toggleModal('filter', false)} className="w-7 h-7 rounded-full bg-slate-200 flex items-center justify-center"><X size={14}/></button></div>
                 <div className="p-5 flex flex-col gap-4">
-                    <div><label className="block text-[11px] font-bold text-slate-500 mb-1.5">Mulai Tanggal</label><input type="date" value={dateFilter.start ? new Date(dateFilter.start - new Date().getTimezoneOffset() * 60000).toISOString().split('T')[0] : ''} onChange={(e) => setDateFilter(p => ({ ...p, start: e.target.value ? new Date(e.target.value).getTime() : null }))} className="w-full bg-transparent outline-none text-sm text-slate-700" /></div>
-                    <div className="relative"><label className="block text-[11px] font-bold text-slate-500 mb-1.5">Hingga Tanggal</label><button onClick={() => { const now = new Date(); now.setHours(0,0,0,0); setDateFilter({ start: now.getTime(), end: now.getTime() }); }} className="absolute right-0 top-0 text-[10px] font-bold text-blue-600 bg-transparent border-none">Hari Ini</button><input type="date" value={dateFilter.end ? new Date(dateFilter.end - new Date().getTimezoneOffset() * 60000).toISOString().split('T')[0] : ''} onChange={(e) => setDateFilter(p => ({ ...p, end: e.target.value ? new Date(e.target.value).getTime() : null }))} className="w-full bg-transparent outline-none text-sm text-slate-700" /></div>
+                    <div>
+                        <label className="block text-[11px] font-bold text-slate-500 mb-1.5">Mulai Tanggal</label>
+                        <input type="date" value={dateFilter.start ? new Date(dateFilter.start - new Date().getTimezoneOffset() * 60000).toISOString().split('T')[0] : ''} onChange={(e) => setDateFilter(p => ({ ...p, start: parseLocalTimeDateInput(e.target.value) }))} className="w-full bg-transparent outline-none text-sm text-slate-700" />
+                    </div>
+                    <div className="relative">
+                        <label className="block text-[11px] font-bold text-slate-500 mb-1.5">Hingga Tanggal</label>
+                        <button onClick={() => { const now = new Date(); now.setHours(0,0,0,0); setDateFilter({ start: now.getTime(), end: now.getTime() }); }} className="absolute right-0 top-0 text-[10px] font-bold text-blue-600 bg-transparent border-none">Hari Ini</button>
+                        <input type="date" value={dateFilter.end ? new Date(dateFilter.end - new Date().getTimezoneOffset() * 60000).toISOString().split('T')[0] : ''} onChange={(e) => setDateFilter(p => ({ ...p, end: parseLocalTimeDateInput(e.target.value) }))} className="w-full bg-transparent outline-none text-sm text-slate-700" />
+                    </div>
                 </div>
                 <div className="p-4 border-t bg-slate-50 flex gap-2"><button onClick={() => { setDateFilter({start:null, end:null}); toggleModal('filter', false); }} className="px-4 py-2 text-slate-600 font-bold bg-slate-200 rounded-lg text-xs flex-1">Reset</button><button onClick={() => toggleModal('filter', false)} className="px-4 py-2 bg-blue-600 text-white font-bold rounded-lg text-xs flex-1">Terapkan</button></div>
             </div>
@@ -681,7 +843,7 @@ export default function App() {
 
   return (
     <div className="bg-slate-50 text-slate-800 min-h-screen p-3 md:p-8 pb-40 font-sans selection:bg-blue-200 relative">
-      <Header />
+      {renderHeader()}
       
       <main className="max-w-6xl mx-auto flex flex-col gap-4 relative z-0">
         
@@ -705,10 +867,10 @@ export default function App() {
                 <h2 className="text-sm font-semibold flex items-center gap-2 text-slate-700"><Database size={16} className="text-purple-500" /> Statistik & Laporan Pesanan</h2>
                 <ChevronDown size={20} className={`text-slate-400 transition-transform ${isStatsOpen ? '' : 'rotate-180'}`} />
             </button>
-            {isStatsOpen && <div className="border-t border-slate-200 bg-white"><StatsSection /></div>}
+            {isStatsOpen && <div className="border-t border-slate-200 bg-white">{renderStatsSection()}</div>}
         </section>
 
-        <QuickActions />
+        {renderQuickActions()}
 
         {/* Tabel Data Utama */}
         <section className="bg-white rounded-xl shadow-sm border border-slate-200 flex flex-col h-full overflow-hidden flex-1 min-h-[400px]">
@@ -741,7 +903,7 @@ export default function App() {
                     <tbody className="divide-y divide-slate-100">{renderTableRows()}</tbody>
                 </table>
             </div>
-            <div className="md:hidden py-1.5 bg-slate-50 border-t border-slate-200 text-[10px] text-center text-slate-400 font-medium">Tahan lama pada baris untuk menyeleksi pesanan</div>
+            <div className="md:hidden py-1.5 bg-slate-50 border-t border-slate-200 text-[10px] text-center text-slate-400 font-medium">Masuk mode seleksi dengan tahan baris, lalu ketuk yang lain</div>
         </section>
 
       </main>
@@ -759,19 +921,11 @@ export default function App() {
       </footer>
 
       {/* SMART SCROLL BUTTONS */}
-      {/* Scroll to Top */}
-      <button 
-        onClick={scrollToTop} 
-        className={`fixed top-8 left-1/2 transform -translate-x-1/2 bg-slate-900/90 backdrop-blur-sm text-white px-4 py-2 rounded-full shadow-[0_8px_30px_rgb(0,0,0,0.12)] flex items-center gap-1.5 transition-all duration-300 z-50 border border-slate-700 hover:bg-black hover:scale-105 ${showScrollTop ? 'translate-y-0 opacity-100 pointer-events-auto' : '-translate-y-12 opacity-0 pointer-events-none'}`}
-      >
+      <button onClick={scrollToTop} className={`fixed top-8 left-1/2 transform -translate-x-1/2 bg-slate-900/90 backdrop-blur-sm text-white px-4 py-2 rounded-full shadow-[0_8px_30px_rgb(0,0,0,0.12)] flex items-center gap-1.5 transition-all duration-300 z-50 border border-slate-700 hover:bg-black hover:scale-105 ${showScrollTop ? 'translate-y-0 opacity-100 pointer-events-auto' : '-translate-y-12 opacity-0 pointer-events-none'}`}>
         <ArrowUp size={14} strokeWidth={3} /> <span className="text-[11px] font-bold uppercase tracking-wider">Ke Atas</span>
       </button>
 
-      {/* Scroll to Bottom */}
-      <button 
-        onClick={scrollToBottom} 
-        className={`fixed bottom-24 left-1/2 transform -translate-x-1/2 bg-slate-900/90 backdrop-blur-sm text-white px-4 py-2 rounded-full shadow-[0_8px_30px_rgb(0,0,0,0.12)] flex items-center gap-1.5 transition-all duration-300 z-50 border border-slate-700 hover:bg-black hover:scale-105 ${showScrollBottom ? 'translate-y-0 opacity-100 pointer-events-auto' : 'translate-y-12 opacity-0 pointer-events-none'}`}
-      >
+      <button onClick={scrollToBottom} className={`fixed bottom-24 left-1/2 transform -translate-x-1/2 bg-slate-900/90 backdrop-blur-sm text-white px-4 py-2 rounded-full shadow-[0_8px_30px_rgb(0,0,0,0.12)] flex items-center gap-1.5 transition-all duration-300 z-50 border border-slate-700 hover:bg-black hover:scale-105 ${showScrollBottom ? 'translate-y-0 opacity-100 pointer-events-auto' : 'translate-y-12 opacity-0 pointer-events-none'}`}>
         <ArrowDown size={14} strokeWidth={3} /> <span className="text-[11px] font-bold uppercase tracking-wider">Ke Bawah</span>
       </button>
 
@@ -791,7 +945,7 @@ export default function App() {
           <span className={`text-xs font-medium leading-tight ${toast.type !== 'interactive' && 'text-white'}`}>{toast.message}</span>
       </div>
 
-      <ModalsLayer />
+      {renderModals()}
 
     </div>
   );
